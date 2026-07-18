@@ -1,5 +1,9 @@
 # Long-Context Attention Kernels
 
+<p align="center">
+  <img src="assets/architecture.svg" alt="Sliding window + global token attention: sparsity pattern and three-kernel pipeline" width="900">
+</p>
+
 CUDA kernels for **sliding-window + global-token attention** (Longformer / BigBird-style
 sparse attention). Standard attention is `O(n^2)` in sequence length, which makes
 32K–128K-token contexts painful. This project implements the sparse attention pattern

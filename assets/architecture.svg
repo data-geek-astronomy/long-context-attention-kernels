@@ -1,0 +1,113 @@
+<svg viewBox="0 0 1100 720" xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>Sliding window + global token attention: sparsity pattern and kernel pipeline</title>
+  <desc>Left: attention matrix showing a local band around the diagonal plus dense global rows and columns. Right: the three-kernel pipeline (sliding window kernel, global token kernel, combine kernel) that computes it without ever materializing the full matrix.</desc>
+
+  <rect x="0" y="0" width="1100" height="720" fill="#0d1117"/>
+
+  <text x="550" y="42" text-anchor="middle" fill="#e6edf3" font-size="24" font-weight="600">Long-Context Attention: Sliding Window + Global Tokens</text>
+  <text x="550" y="68" text-anchor="middle" fill="#8b949e" font-size="14">Same math as dense masked attention — computed without ever forming the full N×N matrix</text>
+
+  <!-- ===================== LEFT: attention matrix ===================== -->
+  <g transform="translate(60,110)">
+    <text x="180" y="-20" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="600">1. What gets attended to</text>
+
+    <!-- matrix background: all masked-out (dark) -->
+    <rect x="0" y="0" width="360" height="360" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+
+    <!-- local band -->
+    <g fill="#3fb950" opacity="0.55">
+      <polygon points="0,0 360,360 360,300 60,0"/>
+      <polygon points="0,0 0,60 300,360 360,360 360,300"/>
+    </g>
+    <!-- redo band cleanly with a clipped diagonal strip -->
+    <clipPath id="matrixClip"><rect x="0" y="0" width="360" height="360"/></clipPath>
+    <g clip-path="url(#matrixClip)">
+      <polygon points="-40,0 40,0 400,360 320,360" fill="#2ea043" opacity="0.65"/>
+    </g>
+
+    <!-- global rows/cols (first 3 tokens = global) -->
+    <rect x="0" y="0" width="360" height="24" fill="#d29922" opacity="0.85"/>
+    <rect x="0" y="0" width="24" height="360" fill="#d29922" opacity="0.85"/>
+
+    <rect x="0" y="0" width="360" height="360" fill="none" stroke="#30363d" stroke-width="1.5"/>
+
+    <text x="180" y="390" text-anchor="middle" fill="#8b949e" font-size="12">key position →</text>
+    <text x="-14" y="180" text-anchor="middle" fill="#8b949e" font-size="12" transform="rotate(-90,-14,180)">query position →</text>
+
+    <!-- legend -->
+    <g transform="translate(0,415)" font-size="12" fill="#c9d1d9">
+      <rect x="0" y="0" width="14" height="14" fill="#2ea043" opacity="0.75"/>
+      <text x="20" y="11">local window (±w)</text>
+      <rect x="0" y="24" width="14" height="14" fill="#d29922" opacity="0.85"/>
+      <text x="20" y="35">global token row/col (dense)</text>
+      <rect x="0" y="48" width="14" height="14" fill="#161b22" stroke="#30363d"/>
+      <text x="20" y="59">skipped — never computed</text>
+    </g>
+  </g>
+
+  <!-- arrow between the two halves -->
+  <g transform="translate(470,290)">
+    <line x1="0" y1="0" x2="80" y2="0" stroke="#58a6ff" stroke-width="2.5" marker-end="url(#arrow)"/>
+    <text x="40" y="-14" text-anchor="middle" fill="#58a6ff" font-size="12">computed as</text>
+  </g>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#58a6ff"/>
+    </marker>
+  </defs>
+
+  <!-- ===================== RIGHT: kernel pipeline ===================== -->
+  <g transform="translate(610,110)">
+    <text x="220" y="-20" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="600">2. Three-kernel pipeline</text>
+
+    <!-- Q K V inputs -->
+    <g transform="translate(0,10)">
+      <rect x="0" y="0" width="70" height="36" rx="6" fill="#1f6feb" opacity="0.85"/>
+      <text x="35" y="23" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Q</text>
+      <rect x="90" y="0" width="70" height="36" rx="6" fill="#1f6feb" opacity="0.85"/>
+      <text x="125" y="23" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">K</text>
+      <rect x="180" y="0" width="70" height="36" rx="6" fill="#1f6feb" opacity="0.85"/>
+      <text x="215" y="23" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">V</text>
+    </g>
+    <line x1="125" y1="46" x2="125" y2="80" stroke="#30363d" stroke-width="2"/>
+    <line x1="35" y1="46" x2="125" y2="80" stroke="#30363d" stroke-width="2"/>
+    <line x1="215" y1="46" x2="125" y2="80" stroke="#30363d" stroke-width="2"/>
+
+    <!-- Kernel 1: sliding window -->
+    <g transform="translate(0,80)">
+      <rect x="0" y="0" width="440" height="70" rx="8" fill="#238636" opacity="0.9"/>
+      <text x="18" y="28" fill="#fff" font-size="14" font-weight="600">Kernel 1 — sliding_window_attention_fwd</text>
+      <text x="18" y="50" fill="#e6f4ea" font-size="12">tiled, online softmax; loads only in-window K/V tiles</text>
+    </g>
+
+    <line x1="220" y1="150" x2="220" y2="180" stroke="#30363d" stroke-width="2"/>
+
+    <!-- Kernel 2: global tokens -->
+    <g transform="translate(0,180)">
+      <rect x="0" y="0" width="440" height="70" rx="8" fill="#9e6a03" opacity="0.9"/>
+      <text x="18" y="28" fill="#fff" font-size="14" font-weight="600">Kernel 2 — global_query_dense_attention</text>
+      <text x="18" y="50" fill="#fdf0d5" font-size="12">global rows attend densely; query→global-keys precomputed</text>
+    </g>
+
+    <line x1="220" y1="250" x2="220" y2="280" stroke="#30363d" stroke-width="2"/>
+
+    <!-- Kernel 3: combine -->
+    <g transform="translate(0,280)">
+      <rect x="0" y="0" width="440" height="70" rx="8" fill="#1f6feb" opacity="0.9"/>
+      <text x="18" y="28" fill="#fff" font-size="14" font-weight="600">Kernel 3 — combine_local_and_global</text>
+      <text x="18" y="50" fill="#e3edfb" font-size="12">log-sum-exp merge of local + global partial softmax</text>
+    </g>
+
+    <line x1="220" y1="350" x2="220" y2="380" stroke="#30363d" stroke-width="2"/>
+
+    <!-- Output -->
+    <g transform="translate(150,380)">
+      <rect x="0" y="0" width="140" height="40" rx="6" fill="#30363d"/>
+      <text x="70" y="25" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="600">Output O</text>
+    </g>
+  </g>
+
+  <!-- footer -->
+  <text x="550" y="700" text-anchor="middle" fill="#6e7681" font-size="12">O(n · w) work instead of O(n²) — full score matrix is never materialized</text>
+</svg>
