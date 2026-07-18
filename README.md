@@ -13,7 +13,9 @@ compute and memory.
 
 This is a companion project to
 [cuda-ml-kernels](https://github.com/data-geek-astronomy/cuda-ml-kernels), which covers
-dense Flash Attention, fused LayerNorm+GELU, INT8 quantization, and tiled GEMM. This repo
+dense Flash Attention, fused LayerNorm+GELU, INT8 quantization, and tiled GEMM, and to
+[`cuda-fusion-compiler/`](cuda-fusion-compiler) in this repo, a small compiler that
+auto-fuses chains of elementwise CUDA ops into a single generated kernel. This repo
 focuses on the sparse long-context case, which has far less open-source CUDA coverage than
 dense transformer attention.
 

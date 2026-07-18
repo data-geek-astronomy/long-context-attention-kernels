@@ -1,0 +1,3 @@
+pytest>=7.0
+# torch is optional: only needed for fusion_compiler/jit.py's runtime
+# compile-and-run path. graph/fuser/codegen/tests work without it.
