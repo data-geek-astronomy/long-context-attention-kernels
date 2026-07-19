@@ -1,13 +1,25 @@
 """Optional runtime path: compile generated CUDA source and load it as a
-callable PyTorch op, using torch.utils.cpp_extension.load_inline.
+callable PyTorch op, using torch.utils.cpp_extension.load.
 
 This is intentionally isolated from graph/fuser/codegen so those modules
 (the actual "compiler" logic this project is about) are testable without a
 GPU or CUDA toolchain. This module is only exercised when both are present.
+
+We write the generated source to a real .cu file and build it with
+torch.utils.cpp_extension.load(..., use_ninja=False) rather than
+load_inline(...): some torch builds don't accept a use_ninja kwarg on
+load_inline at all, and on containers where the `ninja` binary is present
+but broken (returns a non-zero exit code instead of a clean "not found"),
+load_inline's default ninja-based build path fails in a way that's hard to
+work around without dropping to load() directly, which does support
+use_ninja and gives us a real on-disk build directory to inspect if
+something goes wrong again.
 """
 
 from __future__ import annotations
 
+import os
+import tempfile
 from typing import Dict, List
 
 from .fuser import FusionGroup
@@ -15,19 +27,55 @@ from .codegen import generate_cuda_source
 
 try:
     import torch
-    from torch.utils.cpp_extension import load_inline
+    from torch.utils.cpp_extension import load
     _HAS_TORCH = True
 except ImportError:
     _HAS_TORCH = False
 
 
-def _cpp_wrapper(kernel_name: str, num_inputs: int) -> str:
+def _use_torch_bundled_cuda_toolchain():
+    """Point CUDA_HOME/PATH/LD_LIBRARY_PATH at the CUDA toolchain that ships
+    as a pip dependency of the installed torch wheel (nvidia-cuda-nvcc-cu12,
+    nvidia-cuda-runtime-cu12, etc.) instead of whatever CUDA toolkit happens
+    to be installed system-wide in the container, so compile-time and
+    run-time CUDA library versions stay consistent."""
+    try:
+        import nvidia
+    except ImportError:
+        return
+    import glob
+
+    nvidia_root = os.path.dirname(nvidia.__file__)
+    lib_dirs = glob.glob(os.path.join(nvidia_root, "*", "lib"))
+    if lib_dirs:
+        os.environ["LD_LIBRARY_PATH"] = ":".join(lib_dirs + [os.environ.get("LD_LIBRARY_PATH", "")])
+
+    nvcc_dir = os.path.join(nvidia_root, "cuda_nvcc", "bin")
+    if os.path.isdir(nvcc_dir):
+        os.environ["PATH"] = nvcc_dir + ":" + os.environ.get("PATH", "")
+        os.environ["CUDA_HOME"] = os.path.join(nvidia_root, "cuda_nvcc")
+
+
+def _full_source(group: FusionGroup, kernel_name: str) -> str:
+    """One self-contained .cu file: the generated kernel, a launcher, a
+    torch-tensor-facing wrapper function, and its pybind11 bindings --
+    everything nvcc needs in a single translation unit."""
+    cuda_source = generate_cuda_source(group, kernel_name=kernel_name)
+    num_inputs = len(group.inputs)
     args = ", ".join(f"torch::Tensor in{i}" for i in range(num_inputs))
     call_args = ", ".join(f"in{i}.data_ptr<float>()" for i in range(num_inputs))
+    kernel_args = ", ".join(f"ins[{i}]" for i in range(num_inputs))
+
     return f"""
 #include <torch/extension.h>
 
-extern "C" void launch_{kernel_name}(const float** ins, float* out, int n);
+{cuda_source}
+
+extern "C" void launch_{kernel_name}(const float** ins, float* out, int n) {{
+    int threads = 256;
+    int blocks = (n + threads - 1) / threads;
+    {kernel_name}<<<blocks, threads>>>({kernel_args}{', ' if num_inputs else ''}out, n);
+}}
 
 torch::Tensor {kernel_name}_call({args}) {{
     auto out = torch::empty_like(in0);
@@ -56,32 +104,20 @@ def compile_group(group: FusionGroup, kernel_name: str = "fused_kernel"):
     if not torch.cuda.is_available():
         raise RuntimeError("no CUDA device available to JIT-compile fusion groups")
 
-    cuda_source = generate_cuda_source(group, kernel_name=kernel_name)
-    num_inputs = len(group.inputs)
+    _use_torch_bundled_cuda_toolchain()
 
-    # Minimal C launcher bridging the raw extern "C" kernel to a simple
-    # pointer-array ABI the C++ wrapper above can call.
-    launcher = f"""
-{cuda_source}
+    build_dir = os.path.join(tempfile.gettempdir(), f"{kernel_name}_build")
+    os.makedirs(build_dir, exist_ok=True)
+    src_path = os.path.join(build_dir, f"{kernel_name}.cu")
+    with open(src_path, "w") as f:
+        f.write(_full_source(group, kernel_name))
 
-extern "C" void launch_{kernel_name}(const float** ins, float* out, int n) {{
-    int threads = 256;
-    int blocks = (n + threads - 1) / threads;
-    {kernel_name}<<<blocks, threads>>>({', '.join(f'ins[{i}]' for i in range(num_inputs))}{', ' if num_inputs else ''}out, n);
-}}
-"""
-
-    # NOTE: cpp_sources already contains a hand-written PYBIND11_MODULE
-    # block (see _cpp_wrapper above), so we must NOT also pass `functions=`
-    # here -- that tells load_inline to auto-generate its own bindings on
-    # top of ours, producing a duplicate PYBIND11_MODULE definition and a
-    # compile error.
-    module = load_inline(
+    module = load(
         name=kernel_name,
-        cpp_sources=[_cpp_wrapper(kernel_name, max(num_inputs, 1))],
-        cuda_sources=[launcher],
+        sources=[src_path],
         verbose=False,
         use_ninja=False,
+        build_directory=build_dir,
     )
     return module.run
 
