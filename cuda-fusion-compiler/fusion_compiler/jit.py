@@ -45,14 +45,25 @@ def _use_torch_bundled_cuda_toolchain():
     found") than the mismatch we were trying to fix. If nothing is found,
     PATH/CUDA_HOME are left untouched so torch falls back to its own
     default detection instead of pointing at a path known not to exist.
+
+    Returns a short diagnostic string describing what was actually found,
+    so callers can surface it in error messages.
     """
     try:
         import nvidia
     except ImportError:
-        return
+        return "nvidia pip namespace package not importable (nvidia-cuda-runtime-cu12 / nvidia-cuda-nvcc-cu12 not installed?)"
     import glob
+    from importlib import metadata as importlib_metadata
 
     nvidia_root = os.path.dirname(nvidia.__file__)
+    subdirs = sorted(os.listdir(nvidia_root)) if os.path.isdir(nvidia_root) else []
+
+    try:
+        nvcc_pkg_version = importlib_metadata.version("nvidia-cuda-nvcc-cu12")
+    except importlib_metadata.PackageNotFoundError:
+        nvcc_pkg_version = None
+
     lib_dirs = glob.glob(os.path.join(nvidia_root, "*", "lib"))
     if lib_dirs:
         os.environ["LD_LIBRARY_PATH"] = ":".join(lib_dirs + [os.environ.get("LD_LIBRARY_PATH", "")])
@@ -65,6 +76,14 @@ def _use_torch_bundled_cuda_toolchain():
         nvcc_dir = os.path.dirname(nvcc_candidates[0])
         os.environ["PATH"] = nvcc_dir + ":" + os.environ.get("PATH", "")
         os.environ["CUDA_HOME"] = os.path.dirname(nvcc_dir)
+        return f"using nvcc at {nvcc_candidates[0]}"
+
+    return (
+        f"no nvcc binary found under {nvidia_root} (subdirs: {subdirs}); "
+        f"nvidia-cuda-nvcc-cu12 pip package version: {nvcc_pkg_version!r}; "
+        f"lib_dirs found: {lib_dirs}; falling back to system nvcc, which may "
+        f"be a mismatched CUDA version"
+    )
 
 
 def _full_source(group: FusionGroup, kernel_name: str) -> str:
@@ -115,7 +134,7 @@ def compile_group(group: FusionGroup, kernel_name: str = "fused_kernel"):
     if not torch.cuda.is_available():
         raise RuntimeError("no CUDA device available to JIT-compile fusion groups")
 
-    _use_torch_bundled_cuda_toolchain()
+    toolchain_diag = _use_torch_bundled_cuda_toolchain()
 
     build_dir = os.path.join(tempfile.gettempdir(), f"{kernel_name}_build")
     os.makedirs(build_dir, exist_ok=True)
@@ -123,12 +142,15 @@ def compile_group(group: FusionGroup, kernel_name: str = "fused_kernel"):
     with open(src_path, "w") as f:
         f.write(_full_source(group, kernel_name))
 
-    module = load(
-        name=kernel_name,
-        sources=[src_path],
-        verbose=False,
-        build_directory=build_dir,
-    )
+    try:
+        module = load(
+            name=kernel_name,
+            sources=[src_path],
+            verbose=False,
+            build_directory=build_dir,
+        )
+    except Exception as e:
+        raise RuntimeError(f"{e}\n\n[CUDA toolchain diagnostic] {toolchain_diag}") from e
     return module.run
 
 
