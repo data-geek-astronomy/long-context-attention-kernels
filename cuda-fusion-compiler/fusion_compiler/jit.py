@@ -6,14 +6,13 @@ This is intentionally isolated from graph/fuser/codegen so those modules
 GPU or CUDA toolchain. This module is only exercised when both are present.
 
 We write the generated source to a real .cu file and build it with
-torch.utils.cpp_extension.load(..., use_ninja=False) rather than
-load_inline(...): some torch builds don't accept a use_ninja kwarg on
-load_inline at all, and on containers where the `ninja` binary is present
-but broken (returns a non-zero exit code instead of a clean "not found"),
-load_inline's default ninja-based build path fails in a way that's hard to
-work around without dropping to load() directly, which does support
-use_ninja and gives us a real on-disk build directory to inspect if
-something goes wrong again.
+torch.utils.cpp_extension.load() rather than load_inline(...), purely for
+the real on-disk build directory, which is easier to debug if compilation
+fails. This torch build requires ninja unconditionally for JIT extension
+builds (no use_ninja kwarg, no distutils fallback), so a working `ninja`
+binary must be available on PATH -- see this project's packages.txt
+("ninja-build" via apt), since the pip "ninja" wheel's bundled binary has
+been observed failing with exit code 127 in some containers.
 """
 
 from __future__ import annotations
@@ -116,7 +115,6 @@ def compile_group(group: FusionGroup, kernel_name: str = "fused_kernel"):
         name=kernel_name,
         sources=[src_path],
         verbose=False,
-        use_ninja=False,
         build_directory=build_dir,
     )
     return module.run
