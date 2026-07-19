@@ -37,7 +37,15 @@ def _use_torch_bundled_cuda_toolchain():
     as a pip dependency of the installed torch wheel (nvidia-cuda-nvcc-cu12,
     nvidia-cuda-runtime-cu12, etc.) instead of whatever CUDA toolkit happens
     to be installed system-wide in the container, so compile-time and
-    run-time CUDA library versions stay consistent."""
+    run-time CUDA library versions stay consistent.
+
+    Searches for the actual nvcc binary rather than assuming a fixed path --
+    that assumption was wrong on at least one container (bin/ dir existed,
+    no nvcc file inside), which produced a worse failure ("nvcc: not
+    found") than the mismatch we were trying to fix. If nothing is found,
+    PATH/CUDA_HOME are left untouched so torch falls back to its own
+    default detection instead of pointing at a path known not to exist.
+    """
     try:
         import nvidia
     except ImportError:
@@ -49,10 +57,14 @@ def _use_torch_bundled_cuda_toolchain():
     if lib_dirs:
         os.environ["LD_LIBRARY_PATH"] = ":".join(lib_dirs + [os.environ.get("LD_LIBRARY_PATH", "")])
 
-    nvcc_dir = os.path.join(nvidia_root, "cuda_nvcc", "bin")
-    if os.path.isdir(nvcc_dir):
+    nvcc_candidates = [
+        p for p in glob.glob(os.path.join(nvidia_root, "**", "nvcc"), recursive=True)
+        if os.path.isfile(p) and os.access(p, os.X_OK)
+    ]
+    if nvcc_candidates:
+        nvcc_dir = os.path.dirname(nvcc_candidates[0])
         os.environ["PATH"] = nvcc_dir + ":" + os.environ.get("PATH", "")
-        os.environ["CUDA_HOME"] = os.path.join(nvidia_root, "cuda_nvcc")
+        os.environ["CUDA_HOME"] = os.path.dirname(nvcc_dir)
 
 
 def _full_source(group: FusionGroup, kernel_name: str) -> str:
