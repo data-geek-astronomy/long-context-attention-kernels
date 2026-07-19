@@ -81,6 +81,7 @@ extern "C" void launch_{kernel_name}(const float** ins, float* out, int n) {{
         cpp_sources=[_cpp_wrapper(kernel_name, max(num_inputs, 1))],
         cuda_sources=[launcher],
         verbose=False,
+        use_ninja=False,
     )
     return module.run
 
